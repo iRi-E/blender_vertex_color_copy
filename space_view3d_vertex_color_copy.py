@@ -28,19 +28,156 @@ bl_info = {
 }
 
 
-import bpy, mathutils
+import bpy
+from mathutils import Color
 
 
-def copy_vertex_colors(context, source, to_srgb=True, add_palette=False, use_vcpaint=False, layer=None):
+def linear_to_srgb(color):
+    return Color(L * 12.92 if L <= 0.0031308 else 1.055 * pow(L, 1.0 / 2.4) - 0.055 for L in color)
+
+def srgb_to_linear(color):
+    return Color(S / 12.92 if S <= 0.04045 else pow((S + 0.055) / 1.055, 2.4) for S in color)
+
+def clamp_color(color):
+    return Color((e if e >= 0 else 0.0 ) if e < 1.0 else 1.0 for e in color)
+
+def blend_mix(origcol, blencol, factor):
+    return clamp_color((1.0 - factor) * origcol + factor * blencol)
+
+def blend_add(origcol, blencol, factor): # equivalent of linear dodge
+    return clamp_color(origcol + factor * blencol)
+
+def blend_subtract(origcol, blencol, factor):
+    return clamp_color(origcol - factor * blencol)
+
+def blend_multiply(origcol, blencol, factor):
+    return blend_mix(origcol, Color(orig * blen for orig, blen in zip(origcol, blencol)), factor)
+
+def blend_screen(origcol, blencol, factor):
+    return blend_mix(origcol, Color(1.0 - (1.0 - orig) * (1.0 - blen) for orig, blen in zip(origcol, blencol)), factor)
+
+def blend_lighten(origcol, blencol, factor):
+    return blend_mix(origcol, Color(max(orig, blen) for orig, blen in zip(origcol, blencol)), factor)
+
+def blend_darken(origcol, blencol, factor):
+    return blend_mix(origcol, Color(min(orig, blen) for orig, blen in zip(origcol, blencol)), factor)
+
+def blend_colordodge(origcol, blencol, factor):
+    return blend_mix(origcol, Color(orig / (1.0 - min(blen, 0.9999999999)) # avoid division by zero
+                                    for orig, blen in zip(origcol, blencol)), factor)
+
+def blend_colorburn(origcol, blencol, factor):
+    return blend_mix(origcol, Color(1.0 - (1.0 - orig) / max(blen, 0.0000000001) # avoid division by zero
+                                    for orig, blen in zip(origcol, blencol)), factor)
+
+def blend_linearburn(origcol, blencol, factor):
+    return clamp_color(origcol + factor * (blencol - Color((1.0, 1.0, 1.0))))
+
+def blend_overlay(origcol, blencol, factor):
+    return blend_mix(origcol, Color(1.0 - 2.0 * (1.0 - orig) * (1.0 - blen) if orig > 0.5 else 2.0 * orig * blen
+                                    for orig, blen in zip(origcol, blencol)), factor)
+
+def blend_hardlight(origcol, blencol, factor):
+    return blend_mix(origcol, Color(1.0 - 2.0 * (1.0 - orig) * (1.0 - blen) if blen > 0.5 else 2.0 * orig * blen
+                                    for orig, blen in zip(origcol, blencol)), factor)
+
+def blend_softlight(origcol, blencol, factor):
+    return blend_mix(origcol, Color(1.0 - (1.0 - orig) * (1.5 - blen) if blen > 0.5 else orig * (blen + 0.5)
+                                    for orig, blen in zip(origcol, blencol)), factor)
+
+def blend_pinlight(origcol, blencol, factor):
+    return blend_mix(origcol,  Color(max(orig, 2.0 * blen - 1.0) if blen > 0.5 else min(orig, 2.0 * blen)
+                                     for orig, blen in zip(origcol, blencol)), factor)
+
+def blend_vividlight(origcol, blencol, factor):
+    return blend_mix(origcol,  Color(orig / (2.0 * (1.0 - min(blen, 0.9999999999))) if blen > 0.5
+                                     else 1.0 - (1.0 - orig) / (2.0 * max(blen, 0.0000000001))
+                                     for orig, blen in zip(origcol, blencol)), factor)
+
+def blend_linearlight(origcol, blencol, factor):
+    return clamp_color(origcol + factor * (2.0 * blencol - Color((1.0, 1.0, 1.0))))
+
+def blend_difference(origcol, blencol, factor):
+    return blend_mix(origcol, Color(abs(orig - blen) for orig, blen in zip(origcol, blencol)), factor)
+
+def blend_exclusion(origcol, blencol, factor):
+    return blend_mix(origcol, Color(orig + blen - 2.0 * orig * blen for orig, blen in zip(origcol, blencol)), factor)
+
+def blend_color(origcol, blencol, factor):
+    c = blencol
+    c.v = origcol.v
+    return c
+
+def blend_hue(origcol, blencol, factor):
+    c = origcol
+    c.h = blencol.h
+    return c
+
+def blend_saturation(origcol, blencol, factor):
+    c = origcol
+    if c.s > 0.0005: # do nothing if black or white
+        c.s = blencol.s
+    return c
+
+def blend_luminosity(origcol, blencol, factor):
+    c = origcol
+    c.v = blencol.v
+    return c
+
+
+blend_modes ={
+    'MIX':blend_mix,
+    'ADD':blend_add,
+    'SUBTRACT':blend_subtract,
+    'MULTIPLY':blend_multiply,
+    'SCREEN':blend_screen,
+    'LIGHTEN':blend_lighten,
+    'DARKEN':blend_darken,
+    'COLORDODGE':blend_colordodge,
+    'COLORBURN':blend_colorburn,
+    'LINEARBURN':blend_linearburn,
+    'OVERLAY':blend_overlay,
+    'HARDLIGHT':blend_hardlight,
+    'SOFTLIGHT':blend_softlight,
+    'PINLIGHT':blend_pinlight,
+    'VIVIDLIGHT':blend_vividlight,
+    'LINEARLIGHT':blend_linearlight,
+    'DIFFERENCE':blend_difference,
+    'EXCLUSION':blend_exclusion,
+    'COLOR':blend_color,
+    'HUE':blend_hue,
+    'SATURATION':blend_saturation,
+    'LUMINOSITY':blend_luminosity,
+}
+
+
+def add_to_palette(palette, color): # color is sRGB
+    for pc in palette.colors:
+        if color == pc.color:
+            return
+
+    palette.colors.new().color = color
+
+
+def copy_vertex_colors(context, source, uni_color=None, src_layer=None,
+                       blend_mode='REPLACE', blend_factor=1.0, add_palette=False, use_vcpaint=False):
     object = context.active_object
     if object.type == 'MESH' and object.mode == 'VERTEX_PAINT':
         mesh = object.data
         colors = mesh.vertex_colors.active.data
         index = 0
 
-        if source == 'VCOLOR' and layer:
+        try:
+            blend_func = blend_modes[blend_mode]
+        except KeyError:
+            blend_func = blend_mix # fallback
+
+        if uni_color == None:
+            uni_color = srgb_to_linear(context.scene.tool_settings.vertex_paint.brush.color)
+
+        if source == 'VCOLOR' and src_layer:
             try:
-                srccols = mesh.vertex_colors[layer].data
+                srccols = mesh.vertex_colors[src_layer].data
             except KeyError:
                 return False
         else:
@@ -48,7 +185,16 @@ def copy_vertex_colors(context, source, to_srgb=True, add_palette=False, use_vcp
 
         if add_palette:
             palette = context.scene.tool_settings.vertex_paint.palette
-            if not palette:
+
+            if palette:
+                if source == 'UNIFORM' and blend_mode != 'REPLACE':
+                    ncol = len(palette.colors)
+                    for k, pc in enumerate(palette.colors):
+                        if k == ncol:
+                            break
+                        add_to_palette(palette,
+                                       linear_to_srgb(blend_func(srgb_to_linear(pc.color), uni_color, blend_factor)))
+            else:
                 palette = bpy.data.palettes.new("Palette")
                 context.scene.tool_settings.vertex_paint.palette = palette
         else:
@@ -67,8 +213,8 @@ def copy_vertex_colors(context, source, to_srgb=True, add_palette=False, use_vcp
                         material = None
 
                     if material:
-                        if source == 'BRUSH':
-                            color = context.scene.tool_settings.vertex_paint.brush.color
+                        if source == 'UNIFORM':
+                            color = uni_color
                         elif source == 'DIFFUSE':
                             color = material.diffuse_color
                             if use_vcpaint:
@@ -78,22 +224,20 @@ def copy_vertex_colors(context, source, to_srgb=True, add_palette=False, use_vcp
                         elif source == 'LINE':
                             color = material.line_color[0:3]
 
-                        if source in ('DIFFUSE', 'SPECULAR', 'LINE') and to_srgb:
-                            # Linear to sRGB
-                            color = mathutils.Color(L * 12.92 if L <= 0.0031308
-                                                    else 1.055 * pow(L, 1.0 / 2.4) - 0.055 for L in color)
+                if color and blend_mode == 'REPLACE':
+                    color = linear_to_srgb(color)
 
-                        if palette:
-                            for c in palette.colors:
-                                if color == c.color:
-                                    break
-                            else:
-                                pc = palette.colors.new()
-                                pc.color = color
+                    if palette:
+                        add_to_palette(palette, color)
 
                 if color or srccols:
                     for vertex in range(index, index + vertices):
-                        colors[vertex].color = srccols[vertex].color if srccols else color
+                        if blend_mode == 'REPLACE':
+                            colors[vertex].color = color or srccols[vertex].color
+                        else:
+                            colors[vertex].color = linear_to_srgb(
+                                blend_func(srgb_to_linear(colors[vertex].color),
+                                           color or srgb_to_linear(srccols[vertex].color), blend_factor))
 
             index += vertices
     return True
@@ -107,45 +251,93 @@ class PAINT_OT_vertex_color_copy(bpy.types.Operator):
     bl_label = "Copy Vertex Color"
     bl_options = {'REGISTER', 'UNDO'}
 
-    source = bpy.props.EnumProperty(name="Color Source",
+    source = bpy.props.EnumProperty(name="Source Type",
                                     description="Color source that will be copied to the active vertex color layer",
-                                    items={('BRUSH', "Brush Color", "Use Paint Brush Color"),
-                                           ('DIFFUSE', "Diffuse Color", "Use Material Diffuse Color"),
-                                           ('SPECULAR', "Specular Color", "Use Material Spacular Color"),
-                                           ('LINE', "Line Color", "Use Material Line Color"),
-                                           ('VCOLOR', "Vertex Color Layer", "Copy Specified Vertex Color Layer")},
+                                    items=[
+                                        ('UNIFORM', "Uniform Color", "Use Specified Uniform Color"),
+                                        ('DIFFUSE', "Diffuse Color", "Use Material Diffuse Color"),
+                                        ('SPECULAR', "Specular Color", "Use Material Spacular Color"),
+                                        ('LINE', "Line Color", "Use Material Line Color"),
+                                        ('VCOLOR', "Vertex Color Layer", "Copy Specified Vertex Color Layer"),
+                                    ],
                                     default='DIFFUSE')
-    to_srgb = bpy.props.BoolProperty(name="Convert to sRGB",
-                                     description="Convert colors from linear to sRGB",
-                                     default=True)
+    color = bpy.props.FloatVectorProperty(name="Color",
+                                          description="A color used for painting or blending",
+                                          subtype='COLOR', # linear
+                                          min=0.0,
+                                          max=1.0,
+                                          default=Color((1.0, 1.0, 1.0)))
+    source_layer = bpy.props.StringProperty(name="Source Layer",
+                                            description="Vertex color layer used as color source",
+                                            default="")
+    blend_mode = bpy.props.EnumProperty(name="Blend",
+                                        description="How vertex colors in the mesh are affected by the blending tool",
+                                        items=[
+                                            ('REPLACE', "Replace", "Merely replace the vertex colors"),
+                                            ('MIX', "Mix", "Use mix blending mode"),
+                                            ('ADD', "Add", "Use add blending mode"),
+                                            ('SUBTRACT', "Subtract", "Use subtract blending mode"),
+                                            ('MULTIPLY', "Multiply", "Use multiply blending mode"),
+                                            ('SCREEN', "Screen", "Use screen blending mode"),
+                                            ('LIGHTEN', "Lighten", "Use lighten blending mode"),
+                                            ('DARKEN', "Darken", "Use darken blending mode"),
+                                            ('COLORDODGE', "Colordodge", "Use colordodge blending mode"),
+                                            ('COLORBURN', "Colorburn", "Use colorburn blending mode"),
+                                            ('LINEARBURN', "Linearburn", "Use linearburn blending mode"),
+                                            ('OVERLAY', "Overlay", "Use overlay blending mode"),
+                                            ('HARDLIGHT', "Hardlight", "Use hardlight blending mode"),
+                                            ('SOFTLIGHT', "Softlight", "Use softlight blending mode"),
+                                            ('PINLIGHT', "Pinlight", "Use pinlight blending mode"),
+                                            ('VIVIDLIGHT', "Vividlight", "Use vividlight blending mode"),
+                                            ('LINEARLIGHT', "Linearlight", "Use linearlight blending mode"),
+                                            ('DIFFERENCE', "Difference", "Use difference blending mode"),
+                                            ('EXCLUSION', "Exclusion", "Use exclusion blending mode"),
+                                            ('COLOR', "Color", "Use color blending mode"),
+                                            ('HUE', "Hue", "Use hue blending mode"),
+                                            ('SATURATION', "Saturation", "Use saturation blending mode"),
+                                            ('LUMINOSITY', "Luminosity", "Use luminosity blending mode"),
+                                        ],
+                                        default="REPLACE")
+    blend_factor = bpy.props.FloatProperty(name="Factor",
+                                           description="How powerful the effect of the blending tool is",
+                                           soft_min=0.0,
+                                           soft_max=1.0,
+                                           default=1.0)
     add_palette = bpy.props.BoolProperty(name="Add to Palette",
                                          description="Add material colors to active palette",
                                          default=False)
     use_vcpaint = bpy.props.BoolProperty(name="Vertex Color Paint",
-                                         description="Set \"Vertex Color Paint\" flag in each material",
+                                         description="Set \"Vertex Color Paint\" flag in each source material",
                                          default=False)
-    layer = bpy.props.StringProperty(name="Source Layer",
-                                     description="Vertex color layer used as color source",
-                                     default="")
 
     def execute(self, context):
-        done = copy_vertex_colors(context, self.source,
-                                  to_srgb=self.to_srgb, add_palette=self.add_palette,
-                                  use_vcpaint=self.use_vcpaint, layer=self.layer)
+        done = copy_vertex_colors(context, self.source, uni_color=self.color, src_layer=self.source_layer,
+                                  blend_mode=self.blend_mode, blend_factor=self.blend_factor,
+                                  add_palette=self.add_palette, use_vcpaint=self.use_vcpaint)
         return {'FINISHED' if done else 'CANCELLED'}
 
     def draw(self, context):
         layout = self.layout
-        col = layout.column()
+
+        box = layout.box()
+        col = box.column()
 
         col.prop(self, "source")
-        if self.source in ('DIFFUSE', 'SPECULAR', 'LINE'):
-            col.prop(self, "to_srgb")
+        if self.source == 'UNIFORM':
+            col.prop(self, "color", text="")
+        if self.source == 'VCOLOR':
+            col.prop_search(self, "source_layer", context.object.data, "vertex_colors")
+
+        col.prop(self, "blend_mode")
+        if self.blend_mode != "REPLACE":
+            col.prop(self, "blend_factor", slider=True)
+
+        col = layout.column()
+
+        if self.source == 'UNIFORM' or self.source in ('DIFFUSE', 'SPECULAR', 'LINE') and self.blend_mode == 'REPLACE':
             col.prop(self, "add_palette")
         if self.source == 'DIFFUSE':
             col.prop(self, "use_vcpaint")
-        if self.source == 'VCOLOR':
-            col.prop_search(self, "layer", context.object.data, "vertex_colors")
 
 
 # Registration
