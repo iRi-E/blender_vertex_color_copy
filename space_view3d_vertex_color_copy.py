@@ -21,7 +21,7 @@ bl_info = {
     "author": "IRIE Shinsuke",
     "version": (0, 1),
     "blender": (2, 79, 0),
-    "location": "View3D > Paint > Set Vertex Colors from Source",
+    "location": "View3D > Paint > Set Vertex Colors by Copy",
     "description": "Fill the active vertex color layer with colors copied from specified source",
     "tracker_url": "https://github.com/iRi-E/blender_vertex_color_copy/issues",
     "category": "3D View",
@@ -165,7 +165,7 @@ def add_to_palette(palette, color): # color is sRGB
 class PAINT_OT_vertex_color_copy(bpy.types.Operator):
     """Fill the active vertex color layer with colors copied from specified source"""
     bl_idname = "paint.vertex_color_copy"
-    bl_label = "Copy Vertex Color"
+    bl_label = "Set Vertex Colors by Copy"
     bl_options = {'REGISTER', 'UNDO'}
 
     source = bpy.props.EnumProperty(name="Source Type",
@@ -338,7 +338,7 @@ class PAINT_OT_vertex_color_copy(bpy.types.Operator):
 def vertex_color_copy_button(self, context):
     self.layout.operator(
         PAINT_OT_vertex_color_copy.bl_idname,
-        text="Set Vertex Colors from Source",
+        text="Set Vertex Colors by Copy",
         icon='PLUGIN')
 
 def register():
