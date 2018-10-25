@@ -126,6 +126,7 @@ def blend_luminosity(origcol, blencol, factor):
 
 
 blend_modes ={
+    'REPLACE':None,
     'MIX':blend_mix,
     'ADD':blend_add,
     'SUBTRACT':blend_subtract,
@@ -157,90 +158,6 @@ def add_to_palette(palette, color): # color is sRGB
             return
 
     palette.colors.new().color = color
-
-
-def copy_vertex_colors(context, source, uni_color=None, src_layer=None,
-                       blend_mode='REPLACE', blend_factor=1.0, add_palette=False, use_vcpaint=False):
-    object = context.active_object
-    if object.type == 'MESH' and object.mode == 'VERTEX_PAINT':
-        mesh = object.data
-        colors = mesh.vertex_colors.active.data
-        index = 0
-
-        try:
-            blend_func = blend_modes[blend_mode]
-        except KeyError:
-            blend_func = blend_mix # fallback
-
-        if uni_color == None:
-            uni_color = srgb_to_linear(context.scene.tool_settings.vertex_paint.brush.color)
-
-        if source == 'VCOLOR' and src_layer:
-            try:
-                srccols = mesh.vertex_colors[src_layer].data
-            except KeyError:
-                return False
-        else:
-            srccols = None
-
-        if add_palette:
-            palette = context.scene.tool_settings.vertex_paint.palette
-
-            if palette:
-                if source == 'UNIFORM' and blend_mode != 'REPLACE':
-                    ncol = len(palette.colors)
-                    for k, pc in enumerate(palette.colors):
-                        if k == ncol:
-                            break
-                        add_to_palette(palette,
-                                       linear_to_srgb(blend_func(srgb_to_linear(pc.color), uni_color, blend_factor)))
-            else:
-                palette = bpy.data.palettes.new("Palette")
-                context.scene.tool_settings.vertex_paint.palette = palette
-        else:
-            palette = None
-
-        for polygon in mesh.polygons:
-            vertices = len(polygon.vertices)
-
-            if not mesh.use_paint_mask or polygon.select:
-                color = None
-
-                if not srccols:
-                    try:
-                        material = object.material_slots[polygon.material_index].material
-                    except IndexError:
-                        material = None
-
-                    if material:
-                        if source == 'UNIFORM':
-                            color = uni_color
-                        elif source == 'DIFFUSE':
-                            color = material.diffuse_color
-                            if use_vcpaint:
-                                material.use_vertex_color_paint = True
-                        elif source == 'SPECULAR':
-                            color = material.specular_color
-                        elif source == 'LINE':
-                            color = material.line_color[0:3]
-
-                if color and blend_mode == 'REPLACE':
-                    color = linear_to_srgb(color)
-
-                    if palette:
-                        add_to_palette(palette, color)
-
-                if color or srccols:
-                    for vertex in range(index, index + vertices):
-                        if blend_mode == 'REPLACE':
-                            colors[vertex].color = color or srccols[vertex].color
-                        else:
-                            colors[vertex].color = linear_to_srgb(
-                                blend_func(srgb_to_linear(colors[vertex].color),
-                                           color or srgb_to_linear(srccols[vertex].color), blend_factor))
-
-            index += vertices
-    return True
 
 
 # Operator
@@ -311,10 +228,86 @@ class PAINT_OT_vertex_color_copy(bpy.types.Operator):
                                          default=False)
 
     def execute(self, context):
-        done = copy_vertex_colors(context, self.source, uni_color=self.color, src_layer=self.source_layer,
-                                  blend_mode=self.blend_mode, blend_factor=self.blend_factor,
-                                  add_palette=self.add_palette, use_vcpaint=self.use_vcpaint)
-        return {'FINISHED' if done else 'CANCELLED'}
+        object = context.active_object
+        if object.type != 'MESH' or object.mode != 'VERTEX_PAINT':
+            return {'CANCELLED'}
+
+        mesh = object.data
+        dstcols = mesh.vertex_colors.active.data
+        index = 0
+        blend_func = blend_modes[self.blend_mode]
+
+        if self.color == None:
+            self.color = srgb_to_linear(context.scene.tool_settings.vertex_paint.brush.color)
+
+        if self.source == 'VCOLOR' and self.source_layer:
+            try:
+                srccols = mesh.vertex_colors[self.source_layer].data
+            except KeyError:
+                return {'CANCELLED'}
+        else:
+            srccols = None
+
+        if self.add_palette:
+            palette = context.scene.tool_settings.vertex_paint.palette
+
+            if palette:
+                if self.source == 'UNIFORM' and self.blend_mode != 'REPLACE':
+                    ncol = len(palette.colors)
+                    for k, pc in enumerate(palette.colors):
+                        if k == ncol:
+                            break
+                        add_to_palette(palette,
+                                       linear_to_srgb(blend_func(srgb_to_linear(pc.color), self.color, self.blend_factor)))
+            else:
+                palette = bpy.data.palettes.new("Palette")
+                context.scene.tool_settings.vertex_paint.palette = palette
+        else:
+            palette = None
+
+        for polygon in mesh.polygons:
+            vertices = len(polygon.vertices)
+
+            if not mesh.use_paint_mask or polygon.select:
+                color = None
+
+                if not srccols:
+                    try:
+                        material = object.material_slots[polygon.material_index].material
+                    except IndexError:
+                        material = None
+
+                    if material:
+                        if self.source == 'UNIFORM':
+                            color = self.color
+                        elif self.source == 'DIFFUSE':
+                            color = material.diffuse_color
+                            if self.use_vcpaint:
+                                material.use_vertex_color_paint = True
+                        elif self.source == 'SPECULAR':
+                            color = material.specular_color
+                        elif self.source == 'LINE':
+                            color = material.line_color[0:3]
+
+                if color and self.blend_mode == 'REPLACE':
+                    color = linear_to_srgb(color)
+
+                    if palette:
+                        add_to_palette(palette, color)
+
+                if color or srccols:
+                    for vertex in range(index, index + vertices):
+                        if self.blend_mode == 'REPLACE':
+                            dstcols[vertex].color = color or srccols[vertex].color
+                        else:
+                            dstcols[vertex].color = linear_to_srgb(
+                                blend_func(srgb_to_linear(dstcols[vertex].color),
+                                           color or srgb_to_linear(srccols[vertex].color), self.blend_factor))
+
+            index += vertices
+
+        return {'FINISHED'}
+
 
     def draw(self, context):
         layout = self.layout
