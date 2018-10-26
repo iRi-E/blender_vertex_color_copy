@@ -341,14 +341,26 @@ def vertex_color_copy_button(self, context):
         text="Set Vertex Colors by Copy",
         icon='PLUGIN')
 
+addon_keymaps = []
+
 def register():
     bpy.utils.register_class(PAINT_OT_vertex_color_copy)
     bpy.types.VIEW3D_MT_paint_vertex.append(vertex_color_copy_button)
+
+    kcfg = bpy.context.window_manager.keyconfigs.addon
+    if kcfg:
+        km = kcfg.keymaps.new(name='Vertex Paint', space_type='EMPTY')
+        kmi = km.keymap_items.new("paint.vertex_color_copy", 'K', 'PRESS')
+        addon_keymaps.append((km, kmi))
 
 
 def unregister():
     bpy.utils.unregister_class(PAINT_OT_vertex_color_copy)
     bpy.types.VIEW3D_MT_paint_vertex.remove(vertex_color_copy_button)
+
+    for km, kmi in addon_keymaps:
+        km.keymap_items.remove(kmi)
+    addon_keymaps.clear()
 
 
 if __name__ == "__main__":
