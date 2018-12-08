@@ -19,7 +19,7 @@
 bl_info = {
     "name": "Vertex Color Copy",
     "author": "IRIE Shinsuke",
-    "version": (0, 1),
+    "version": (0, 2),
     "blender": (2, 79, 0),
     "location": "View3D > Paint > Set Vertex Colors by Copy",
     "description": "Fill the active vertex color layer with colors copied from specified source",
